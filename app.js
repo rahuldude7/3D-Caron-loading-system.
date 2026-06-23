@@ -1,5 +1,3 @@
-
-
 (function () {
   'use strict';
 
@@ -10,17 +8,46 @@
     0x4ADE80, 0xFACC15, 0x38BDF8, 0xF87171,
   ];
 
+  // FCL = Full Container Load, LCL = Less-than-Container Load
   const PRESETS = {
-    20: [589,  234, 239, 21700],
-    40: [1203, 234, 239, 26680],
-    hc: [1203, 234, 269, 26480],
-    lt: [1360, 248, 278, 15000],
+    20:    [589,  234, 239, 21700, 'FCL'],
+    40:    [1203, 234, 239, 26680, 'FCL'],
+    hc:    [1203, 234, 269, 26480, 'FCL'],
+    lt:    [1360, 248, 278, 15000, 'FCL'],
+    lcl20: [589,  234, 239, 10000, 'LCL'],  // half-load LCL in 20ft
+    lcl40: [1203, 234, 239, 14000, 'LCL'],  // half-load LCL in 40ft
   };
 
   /* ── STATE ── */
-  let types    = [];   // carton type objects
-  let places   = [];   // current placement results
+  let types    = [];
+  let places   = [];
   let colorIdx = 0;
+  let currentMode = 'FCL';   // 'FCL' or 'LCL'
+
+  /* ─────────────────────────────────────────────
+     FCL / LCL MODE TOGGLE
+  ───────────────────────────────────────────── */
+  function setMode(mode) {
+    currentMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('mode' + mode).classList.add('active');
+
+    const badge = document.getElementById('modeBadge');
+    const info  = document.getElementById('modeInfo');
+    if (mode === 'FCL') {
+      badge.textContent = 'FCL';
+      badge.className   = 'mode-badge fcl';
+      info.textContent  = 'Full Container Load — entire container reserved for one shipper.';
+    } else {
+      badge.textContent = 'LCL';
+      badge.className   = 'mode-badge lcl';
+      info.textContent  = 'Less-than-Container Load — shared container, partial fill.';
+    }
+
+    // Show/hide LCL utilization warning threshold
+    const lclNote = document.getElementById('lclNote');
+    if (lclNote) lclNote.style.display = mode === 'LCL' ? 'block' : 'none';
+  }
 
   /* ─────────────────────────────────────────────
      CONTAINER PRESETS
@@ -28,11 +55,12 @@
   function setPreset(type, el) {
     document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
     el.classList.add('active');
-    const [l, w, h, wt] = PRESETS[type];
-    document.getElementById('cL').value    = l;
-    document.getElementById('cW').value    = w;
-    document.getElementById('cH').value    = h;
+    const [l, w, h, wt, mode] = PRESETS[type];
+    document.getElementById('cL').value     = l;
+    document.getElementById('cW').value     = w;
+    document.getElementById('cH').value     = h;
     document.getElementById('cMaxWt').value = wt;
+    if (mode) setMode(mode);
   }
 
   /* ─────────────────────────────────────────────
@@ -70,11 +98,8 @@
     _renderCartonList();
   }
 
-  /* ─────────────────────────────────────────────
-     RENDER CARTON LIST
-  ───────────────────────────────────────────── */
   function _renderCartonList() {
-    const el = document.getElementById('cartonList');
+    const el  = document.getElementById('cartonList');
     const ctC = document.getElementById('ctC');
     ctC.textContent = types.length ? `(${types.length})` : '';
 
@@ -118,23 +143,38 @@
       return;
     }
 
-    // Run packing algorithm
+    // LCL: apply 60% fill cap (shared container, reserved space for other shippers)
+    const effectiveVol = currentMode === 'LCL'
+      ? cL * cW * cH * 0.60
+      : cL * cW * cH;
+
     const result = Packer.pack(cL, cW, cH, maxWt, types);
     places = result.placements;
 
-    // ── Update stats ──
-    const cVol   = cL * cW * cH;
-    const pVol   = places.reduce((s, p) => s + p.l * p.w * p.h, 0);
-    const util   = (pVol / cVol) * 100;
+    // For LCL, trim placements to 60% volume cap
+    if (currentMode === 'LCL') {
+      let cumVol = 0;
+      places = places.filter(p => {
+        cumVol += p.l * p.w * p.h;
+        return cumVol <= effectiveVol;
+      });
+    }
+
+    const cVol  = cL * cW * cH;
+    const pVol  = places.reduce((s, p) => s + p.l * p.w * p.h, 0);
+    const util  = (pVol / cVol) * 100;
     const totReq = types.reduce((s, t) => s + t.qty, 0);
-    const ys     = places.map(p => p.y + p.h);
-    const maxH   = ys.length ? Math.max(...ys) : 0;
-    const layers = places.length
-      ? new Set(places.map(p => Math.round(p.y))).size : 0;
+    const ys    = places.map(p => p.y + p.h);
+    const maxH  = ys.length ? Math.max(...ys) : 0;
+    const layers = places.length ? new Set(places.map(p => Math.round(p.y))).size : 0;
+
+    // Utilisation colour — LCL warns above 60%
+    const utilColor = currentMode === 'LCL'
+      ? (util > 60 ? 'var(--red)' : util > 40 ? 'var(--amber)' : 'var(--green)')
+      : (util > 80 ? 'var(--green)' : util > 55 ? 'var(--amber)' : 'var(--red)');
 
     _setStat('sv1', `${util.toFixed(1)}<span class="u"> %</span>`);
-    _setBar('sb1', util,
-      util > 80 ? 'var(--green)' : util > 55 ? 'var(--amber)' : 'var(--red)');
+    _setBar('sb1', util, utilColor);
 
     _setStat('sv2', places.length);
     document.getElementById('ss2').textContent = `of ${totReq} requested`;
@@ -148,13 +188,15 @@
     _setStat('sv5', `${(cVol / 1e6).toFixed(2)}<span class="u"> m³</span>`);
     document.getElementById('ss5').textContent = `${(pVol / 1e6).toFixed(2)} m³ packed`;
 
-    // ── Render 3D ──
-    Renderer.buildScene({ l: cL, w: cW, h: cH }, places);
+    // Mode badge in stats
+    const modeStat = document.getElementById('svMode');
+    if (modeStat) {
+      modeStat.innerHTML = `<span class="mode-badge ${currentMode.toLowerCase()}">${currentMode}</span>`;
+    }
 
-    // ── Update manifest + legend ──
+    Renderer.buildScene({ l: cL, w: cW, h: cH }, places);
     _renderManifest();
     _renderLegend();
-
     fb.innerHTML = '';
   }
 
@@ -234,13 +276,53 @@
   /* ─────────────────────────────────────────────
      HELPERS
   ───────────────────────────────────────────── */
-  function _setStat(id, html) {
-    document.getElementById(id).innerHTML = html;
-  }
+  function _setStat(id, html) { document.getElementById(id).innerHTML = html; }
   function _setBar(id, pct, color) {
     const el = document.getElementById(id);
     el.style.width      = Math.min(pct, 100) + '%';
     el.style.background = color;
+  }
+
+  /* ─────────────────────────────────────────────
+     GENERATE PDF REPORT
+  ───────────────────────────────────────────── */
+  function generateReport() {
+    const fb = document.getElementById('fb');
+    if (!places.length) {
+      fb.innerHTML = '<div class="feedback fb-warn">Run optimization first before generating a report.</div>';
+      return;
+    }
+    if (!window.jspdf) {
+      fb.innerHTML = '<div class="feedback fb-warn">PDF library not loaded — check internet connection.</div>';
+      return;
+    }
+
+    const cL    = +document.getElementById('cL').value;
+    const cW    = +document.getElementById('cW').value;
+    const cH    = +document.getElementById('cH').value;
+    const maxWt = +document.getElementById('cMaxWt').value || 99999;
+
+    const runId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const now   = new Date().toLocaleString('en-GB', {
+      day: '2-digit', month: 'long', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+    });
+    const totalWeight = places.reduce((s, p) => s + (p.item.wt || 0), 0);
+
+    ReportGen.generate({
+      containerL:  cL,
+      containerW:  cW,
+      containerH:  cH,
+      maxWeight:   maxWt,
+      placements:  places,
+      cartonTypes: types,
+      totalWeight,
+      runId,
+      timestamp:   now,
+      mode:        currentMode,
+    });
+
+    fb.innerHTML = '<div class="feedback fb-ok">✓ PDF report downloaded.</div>';
   }
 
   /* ─────────────────────────────────────────────
@@ -249,39 +331,29 @@
   function _boot() {
     Renderer.init();
     Renderer.initTooltip();
-
-    // Pre-load two demo carton types
-    const demos = [
-      { bL: 60, bW: 40, bH: 30, bQty: 80, bWt: 12, bSKU: 'SKU-001', bRot: 6 },
-      { bL: 45, bW: 45, bH: 45, bQty: 40, bWt: 8,  bSKU: 'SKU-002', bRot: 6 },
-    ];
-    demos.forEach(d => {
-      Object.entries(d).forEach(([k, v]) => {
-        document.getElementById(k).value = v;
-      });
-      addCarton();
-    });
+    setMode('FCL');
+    // Start completely empty — no demo cartons, no auto-run
     document.getElementById('fb').innerHTML = '';
   }
 
-  // Run after DOM is ready
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', _boot);
   } else {
     _boot();
   }
 
-  // Public API — called from inline onclick handlers in HTML
   window.App = {
     setPreset,
     addCarton,
     removeType,
     run,
     clearAll,
-    // camera + view controls delegated to Renderer
-    cam:             p  => Renderer.setCameraPreset(p),
-    toggleExplode:   ()  => Renderer.toggleExplode(),
-    toggleWire:      ()  => Renderer.toggleWireframe(),
+    generateReport,
+    setMode,
+    cam:           p  => Renderer.setCameraPreset(p),
+    toggleExplode: ()  => Renderer.toggleExplode(),
+    toggleWire:    ()  => Renderer.toggleWireframe(),
+    toggleDoor:    ()  => Renderer.toggleDoor(),
   };
 
 })();
