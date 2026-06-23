@@ -1,11 +1,8 @@
-
-
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* ── RESET ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* ── DESIGN TOKENS ── */
+
 :root {
   --ink:    #080C16;
   --ink2:   #0F1623;
@@ -323,10 +320,27 @@ select option { background: var(--ink2); color: var(--text); }
   color: var(--muted);
   margin-top: 6px;
 }
+.btn-clear {
+  background: transparent;
+  border: 1px solid var(--rim2);
+  color: var(--muted);
+  margin-top: 6px;
+}
 .btn-clear:hover {
   background: var(--red-soft);
   border-color: var(--red-edge);
   color: var(--red);
+}
+
+.btn-pdf {
+  background: transparent;
+  border: 1px solid rgba(45,212,191,0.30);
+  color: var(--teal);
+  margin-top: 6px;
+}
+.btn-pdf:hover {
+  background: var(--teal-soft);
+  border-color: rgba(45,212,191,0.55);
 }
 
 /* carton list */
@@ -736,3 +750,119 @@ tbody td:first-child { color: var(--text); font-weight: 500; }
   font-size: 11px;
   font-style: italic;
 }
+
+/* ══════════════════════════════════════════
+   FCL / LCL MODE STYLES
+══════════════════════════════════════════ */
+
+.mode-toggle-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.mode-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 6px;
+  background: var(--surface2);
+  border: 1px solid var(--rim);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+  letter-spacing: 0.02em;
+}
+.mode-btn:hover {
+  background: var(--surface3, #1e2d40);
+  color: var(--text);
+}
+.mode-btn.active {
+  background: rgba(245,158,11,0.12);
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.mode-sub {
+  font-size: 9.5px;
+  font-weight: 400;
+  color: var(--muted2);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.mode-btn.active .mode-sub { color: var(--amber); opacity: 0.75; }
+
+.mode-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 2px 8px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+.mode-badge.fcl {
+  background: rgba(245,158,11,0.18);
+  color: #F59E0B;
+  border: 1px solid rgba(245,158,11,0.4);
+}
+.mode-badge.lcl {
+  background: rgba(45,212,191,0.15);
+  color: #2DD4BF;
+  border: 1px solid rgba(45,212,191,0.4);
+}
+
+.mode-info-text {
+  font-size: 11px;
+  color: var(--muted2);
+  margin-left: 8px;
+}
+
+.lcl-note {
+  background: rgba(245,158,11,0.08);
+  border: 1px solid rgba(245,158,11,0.25);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 11px;
+  color: #F59E0B;
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.lcl-chip {
+  border-color: rgba(45,212,191,0.4) !important;
+  color: #2DD4BF !important;
+}
+.lcl-chip.active {
+  background: rgba(45,212,191,0.15) !important;
+  border-color: #2DD4BF !important;
+}
+
+/* ── DOOR BUTTON ── */
+.door-btn {
+  background: rgba(45,212,191,0.08) !important;
+  border-color: rgba(45,212,191,0.45) !important;
+  color: #2DD4BF !important;
+  font-weight: 600;
+}
+.door-btn:hover {
+  background: rgba(45,212,191,0.18) !important;
+}
+.door-btn.on {
+  background: rgba(45,212,191,0.22) !important;
+  border-color: #2DD4BF !important;
+}
+
+/* ── TOPBAR MODE ROW ── */
+.tb-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+
