@@ -3,11 +3,20 @@
 
   /* ── private state ── */
   let scene, camera, renderer;
-  let meshes  = [];   // all dynamic scene objects (boxes + edges + floor)
-  let cMesh   = null; // container ghost mesh
+  let meshes  = [];
+  let cMesh   = null;
   let CL = 1, CW = 1, CH = 1;
   let exploded = false;
   let wired    = false;
+
+  /* door animation */
+  let doorL = null, doorR = null;
+  let doorOpen = false;
+  let doorAnimId = null;
+  let doorTargetAngle = 0;
+  let doorCurrentAngle = 0;
+
+  let containerGroup = null;
 
   /* raycaster */
   const rc = new THREE.Raycaster();
@@ -22,34 +31,49 @@
     renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setClearColor(0x1a1a2e);
 
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x070B12);
+    scene.fog = new THREE.FogExp2(0x1a1a2e, 0.000045);
 
-    // Lighting rig
-    const amb  = new THREE.AmbientLight(0xffffff, 0.45);
+    /* ── Lighting ── */
+    const amb = new THREE.AmbientLight(0x8ab4d4, 0.65);
     scene.add(amb);
 
-    const sun  = new THREE.DirectionalLight(0xfff8e7, 0.9);
-    sun.position.set(800, 1200, 600);
+    const sun = new THREE.DirectionalLight(0xfff0d0, 1.1);
+    sun.position.set(800, 1500, 600);
     sun.castShadow = true;
+    sun.shadow.mapSize.width  = 2048;
+    sun.shadow.mapSize.height = 2048;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far  = 8000;
+    sun.shadow.camera.left  = -2000;
+    sun.shadow.camera.right =  2000;
+    sun.shadow.camera.top   =  2000;
+    sun.shadow.camera.bottom = -2000;
     scene.add(sun);
 
-    const fill = new THREE.DirectionalLight(0x2DD4BF, 0.2);
-    fill.position.set(-600, 200, -400);
+    const fill = new THREE.DirectionalLight(0x4fc3f7, 0.3);
+    fill.position.set(-600, 300, -400);
     scene.add(fill);
 
-    const rim  = new THREE.DirectionalLight(0x818CF8, 0.15);
-    rim.position.set(200, -100, 800);
-    scene.add(rim);
+    /* Deck floor */
+    const deckGeo = new THREE.PlaneGeometry(6000, 6000);
+    const deckMat = new THREE.MeshLambertMaterial({ color: 0x1a2a1a });
+    const deck = new THREE.Mesh(deckGeo, deckMat);
+    deck.rotation.x = -Math.PI / 2;
+    deck.position.y = -1;
+    deck.receiveShadow = true;
+    deck.name = 'deck';
+    scene.add(deck);
 
-    // Floor grid
-    const grid = new THREE.GridHelper(2000, 40, 0x1a2332, 0x111827);
+    /* Grid */
+    const grid = new THREE.GridHelper(3000, 60, 0x2a4a2a, 0x1a2a1a);
     grid.name = 'grid';
     scene.add(grid);
 
-    // Camera
-    camera = new THREE.PerspectiveCamera(45, 1, 1, 10000);
+    camera = new THREE.PerspectiveCamera(45, 1, 1, 20000);
     camera.position.set(700, 600, 900);
     camera.lookAt(294, 119, 117);
 
@@ -78,7 +102,7 @@
   }
 
   /* ─────────────────────────────────────────────
-     ORBIT CONTROLS  (manual — no OrbitControls dep)
+     ORBIT CONTROLS
   ───────────────────────────────────────────── */
   function _setupOrbit(canvas) {
     let drag = false, rightDrag = false, lx = 0, ly = 0;
@@ -94,8 +118,6 @@
       camera.lookAt(T.x, T.y, T.z);
     }
     update();
-
-    // expose for camera preset switching
     window._OS = { S, T, update };
 
     canvas.addEventListener('mousedown', e => {
@@ -120,11 +142,10 @@
     });
 
     canvas.addEventListener('wheel', e => {
-      S.r = Math.max(80, Math.min(5000, S.r + e.deltaY * 1.2));
+      S.r = Math.max(80, Math.min(8000, S.r + e.deltaY * 1.2));
       update();
     }, { passive: true });
 
-    // Touch
     let touches = [], lastPinch = 0;
     canvas.addEventListener('touchstart', e => { touches = [...e.touches]; lastPinch = 0; }, { passive: true });
     canvas.addEventListener('touchmove', e => {
@@ -135,14 +156,245 @@
         S.ph = Math.max(0.08, Math.min(Math.PI - 0.08, S.ph + dy * 0.012));
         update(); touches = [...e.touches];
       } else if (e.touches.length === 2) {
-        const d = Math.hypot(
-          e.touches[0].clientX - e.touches[1].clientX,
-          e.touches[0].clientY - e.touches[1].clientY
-        );
-        if (lastPinch) S.r = Math.max(80, Math.min(5000, S.r - (d - lastPinch) * 3));
+        const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        if (lastPinch) S.r = Math.max(80, Math.min(8000, S.r - (d - lastPinch) * 3));
         lastPinch = d; update();
       }
     }, { passive: true });
+  }
+
+  /* ─────────────────────────────────────────────
+     BUILD CONTAINER
+     Coordinate system:
+       X axis: 0 = REAR/DOOR end,  cL = FRONT/closed end
+       Y axis: 0 = floor,          cH = roof
+       Z axis: 0 = left side,      cW = right side
+
+     The rear face (x=0) has two doors.
+
+     DOOR GEOMETRY & ROTATION — the key insight:
+       Each door panel is a PlaneGeometry sitting in the ZY plane at x=0.
+       The panel's local geometry is centered at origin of the pivot group.
+       
+       Left door:
+         - Hinge edge at z=0 (left side of container rear)
+         - Panel extends from z=0 to z=cW/2
+         - Local: panel center is at z = +dHalfW/2 inside pivot group
+         - Pivot group world position: (0, cH/2, 0)
+         - OPEN = rotate pivot group by -PI/2 around Y
+           → panel swings from ZY plane into XZ plane, going to NEGATIVE Z (outside)
+           
+       Right door:
+         - Hinge edge at z=cW (right side of container rear)
+         - Panel extends from z=cW/2 to z=cW
+         - Local: panel center is at z = -dHalfW/2 inside pivot group
+         - Pivot group world position: (0, cH/2, cW)
+         - OPEN = rotate pivot group by +PI/2 around Y
+           → panel swings from ZY plane into XZ plane, going to POSITIVE Z (outside)
+  ───────────────────────────────────────────── */
+  function _buildContainer(cL, cW, cH) {
+    if (containerGroup) {
+      scene.remove(containerGroup);
+      containerGroup = null;
+    }
+    doorL = null; doorR = null;
+    doorOpen = false;
+    doorCurrentAngle = 0;
+    doorTargetAngle  = 0;
+
+    containerGroup = new THREE.Group();
+
+    const steelMat = new THREE.MeshLambertMaterial({
+      color: 0x2f81f7, transparent: true, opacity: 0.08, side: THREE.BackSide
+    });
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0xF59E0B, transparent: true, opacity: 0.7
+    });
+    const wallMat = new THREE.MeshLambertMaterial({
+      color: 0x1e3a5f, transparent: true, opacity: 0.18, side: THREE.DoubleSide
+    });
+
+    /* Ghost box */
+    const cGeo = new THREE.BoxGeometry(cL, cH, cW);
+    const ghost = new THREE.Mesh(cGeo, steelMat);
+    ghost.position.set(cL / 2, cH / 2, cW / 2);
+    containerGroup.add(ghost);
+
+    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(cGeo), edgeMat);
+    edge.position.copy(ghost.position);
+    containerGroup.add(edge);
+
+    /* Side walls (left z=0, right z=cW) */
+    const sideGeo = new THREE.PlaneGeometry(cL, cH);
+    const sideL = new THREE.Mesh(sideGeo, wallMat);
+    sideL.position.set(cL / 2, cH / 2, 0);
+    containerGroup.add(sideL);
+
+    const sideR = new THREE.Mesh(sideGeo.clone(), wallMat);
+    sideR.position.set(cL / 2, cH / 2, cW);
+    containerGroup.add(sideR);
+
+    /* Roof */
+    const roof = new THREE.Mesh(new THREE.PlaneGeometry(cL, cW), wallMat);
+    roof.rotation.x = -Math.PI / 2;
+    roof.position.set(cL / 2, cH, cW / 2);
+    containerGroup.add(roof);
+
+    /* Front wall (closed end, x=cL) */
+    const frontWall = new THREE.Mesh(new THREE.PlaneGeometry(cW, cH), wallMat);
+    frontWall.rotation.y = Math.PI / 2;
+    frontWall.position.set(cL, cH / 2, cW / 2);
+    containerGroup.add(frontWall);
+
+    /* Floor */
+    const floorMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(cL, cW),
+      new THREE.MeshLambertMaterial({ color: 0x2a1a0a, transparent: true, opacity: 0.7 })
+    );
+    floorMesh.rotation.x = -Math.PI / 2;
+    floorMesh.position.set(cL / 2, 0, cW / 2);
+    floorMesh.receiveShadow = true;
+    containerGroup.add(floorMesh);
+
+    /* Horizontal ribs on side walls */
+    const ribMat = new THREE.LineBasicMaterial({ color: 0x1a4a8a, transparent: true, opacity: 0.4 });
+    for (let rib = 0; rib < 6; rib++) {
+      const y = (cH / 7) * (rib + 1);
+      [[0, 0, cL, 0], [0, cW, cL, cW]].forEach(([x0, z0, x1, z1]) => {
+        const geo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(x0, y, z0), new THREE.Vector3(x1, y, z1)
+        ]);
+        containerGroup.add(new THREE.LineSegments(geo, ribMat));
+      });
+    }
+
+    /* ════════════════════════════════════════
+       REAR DOORS  (at x=0 face)
+       
+       Strategy: build each door as a box (thin slab) so it has
+       physical thickness and looks solid from both sides.
+       
+       The pivot group is placed at the HINGE WORLD POSITION.
+       The door slab is offset inside the group so the hinge edge
+       sits at the group's local origin.
+       
+       Opening direction:
+         Left  door rotates around Y at z=0:  angle goes 0 → -π/2
+           (swings the free end from z=+dHalfW outward to x=-dHalfW)
+         Right door rotates around Y at z=cW: angle goes 0 → +π/2
+           (swings the free end from z=-dHalfW outward to x=+dHalfW)
+    ════════════════════════════════════════ */
+    const dHalfW  = cW / 2;
+    const dH      = cH - 4;
+    const dThick  = 5;   // door thickness (cm)
+    const OPEN_ANGLE = Math.PI / 2; // 90° open
+
+    const doorPaintMat = new THREE.MeshLambertMaterial({ color: 0x1e4a8a });
+    const doorEdgeMat2 = new THREE.LineBasicMaterial({ color: 0xF59E0B, transparent: true, opacity: 0.9 });
+    const handleMat   = new THREE.MeshLambertMaterial({ color: 0xcccccc });
+
+    /* ── LEFT DOOR ──
+       Hinge: world (0, cH/2, 0)  — left edge of rear face
+       Slab local: BoxGeometry(dThick, dH, dHalfW)
+         center at local (0, 0, dHalfW/2)  → free end at local z=dHalfW
+       Closed: slab lies in ZY plane (x≈0, z=[0..dHalfW])
+       Open: pivot rotates -π/2 around Y → free end moves to world x=-dHalfW
+    */
+    {
+      const slabGeo  = new THREE.BoxGeometry(dThick, dH, dHalfW);
+      const slabMesh = new THREE.Mesh(slabGeo, doorPaintMat);
+      slabMesh.position.set(0, 0, dHalfW / 2);   // hinge edge at local z=0
+      slabMesh.castShadow = true;
+
+      const slabEdge = new THREE.LineSegments(new THREE.EdgesGeometry(slabGeo), doorEdgeMat2);
+      slabEdge.position.copy(slabMesh.position);
+
+      /* Handle: near free end of door */
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(8, 60, 6), handleMat);
+      handle.position.set(dThick / 2 + 2, 0, dHalfW - 12);
+
+      /* Lock rod */
+      const lock = new THREE.Mesh(
+        new THREE.CylinderGeometry(3, 3, dH * 0.55, 6),
+        new THREE.MeshLambertMaterial({ color: 0xaaaaaa })
+      );
+      lock.position.set(0, 0, dHalfW - 20);
+
+      doorL = new THREE.Group();
+      doorL.position.set(0, cH / 2, 0);   // pivot at hinge
+      doorL.add(slabMesh, slabEdge, handle, lock);
+      containerGroup.add(doorL);
+    }
+
+    /* ── RIGHT DOOR ──
+       Hinge: world (0, cH/2, cW)  — right edge of rear face
+       Slab local: center at local (0, 0, -dHalfW/2) → free end at local z=-dHalfW
+       Open: pivot rotates +π/2 around Y → free end moves to world x=+dHalfW (outside)
+    */
+    {
+      const slabGeo  = new THREE.BoxGeometry(dThick, dH, dHalfW);
+      const slabMesh = new THREE.Mesh(slabGeo, doorPaintMat);
+      slabMesh.position.set(0, 0, -dHalfW / 2);  // hinge edge at local z=0
+      slabMesh.castShadow = true;
+
+      const slabEdge = new THREE.LineSegments(new THREE.EdgesGeometry(slabGeo), doorEdgeMat2);
+      slabEdge.position.copy(slabMesh.position);
+
+      const handle = new THREE.Mesh(new THREE.BoxGeometry(8, 60, 6), handleMat);
+      handle.position.set(dThick / 2 + 2, 0, -dHalfW + 12);
+
+      const lock = new THREE.Mesh(
+        new THREE.CylinderGeometry(3, 3, dH * 0.55, 6),
+        new THREE.MeshLambertMaterial({ color: 0xaaaaaa })
+      );
+      lock.position.set(0, 0, -dHalfW + 20);
+
+      doorR = new THREE.Group();
+      doorR.position.set(0, cH / 2, cW);  // pivot at hinge
+      doorR.add(slabMesh, slabEdge, handle, lock);
+      containerGroup.add(doorR);
+    }
+
+    containerGroup.userData.openAngle = OPEN_ANGLE;
+
+    scene.add(containerGroup);
+    cMesh = ghost;
+
+    return containerGroup;
+  }
+
+  /* ─────────────────────────────────────────────
+     DOOR ANIMATION
+     Left  door: rotation.y: 0 → -π/2  (swings outward to negative-Z side)
+     Right door: rotation.y: 0 → +π/2  (swings outward to positive-Z side)
+  ───────────────────────────────────────────── */
+  function toggleDoor() {
+    doorOpen = !doorOpen;
+    const openAngle = (containerGroup && containerGroup.userData.openAngle) || Math.PI / 2;
+    doorTargetAngle = doorOpen ? openAngle : 0;
+    _animateDoor();
+
+    const btn = document.getElementById('doorBtn');
+    if (btn) btn.textContent = doorOpen ? '🔓 Close Door' : '🚪 Open Door';
+  }
+
+  function _animateDoor() {
+    if (doorAnimId) cancelAnimationFrame(doorAnimId);
+    const step = () => {
+      if (!doorL || !doorR) return;
+      const diff = doorTargetAngle - doorCurrentAngle;
+      if (Math.abs(diff) < 0.003) {
+        doorCurrentAngle = doorTargetAngle;
+        doorL.rotation.y = -doorCurrentAngle;   // left:  swings outward = negative Y rotation
+        doorR.rotation.y = +doorCurrentAngle;   // right: swings outward = positive Y rotation
+        return;
+      }
+      doorCurrentAngle += diff * 0.07;
+      doorL.rotation.y = -doorCurrentAngle;
+      doorR.rotation.y = +doorCurrentAngle;
+      doorAnimId = requestAnimationFrame(step);
+    };
+    step();
   }
 
   /* ─────────────────────────────────────────────
@@ -153,81 +405,55 @@
     CW = containerDims.w;
     CH = containerDims.h;
 
-    // Clear previous scene objects
     meshes.forEach(m => scene.remove(m));
     meshes = [];
-    if (cMesh) { scene.remove(cMesh); cMesh = null; }
 
-    // Container ghost + wireframe
-    const cGeo = new THREE.BoxGeometry(CL, CH, CW);
+    _buildContainer(CL, CW, CH);
 
-    cMesh = new THREE.Mesh(cGeo, new THREE.MeshBasicMaterial({
-      color: 0x2f81f7, transparent: true, opacity: 0.025, side: THREE.BackSide
-    }));
-    cMesh.position.set(CL / 2, CH / 2, CW / 2);
-    scene.add(cMesh);
-
-    const cEdge = new THREE.LineSegments(
-      new THREE.EdgesGeometry(cGeo),
-      new THREE.LineBasicMaterial({ color: 0xF59E0B, transparent: true, opacity: 0.55 })
-    );
-    cEdge.position.copy(cMesh.position);
-    scene.add(cEdge);
-    meshes.push(cEdge);
-
-    // Floor plane
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(CL, CW),
-      new THREE.MeshBasicMaterial({ color: 0x111827, transparent: true, opacity: 0.7 })
-    );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(CL / 2, 0, CW / 2);
-    scene.add(floor);
-    meshes.push(floor);
-
-    // Reposition grid
     const grid = scene.getObjectByName('grid');
     if (grid) {
       grid.position.set(CL / 2, -0.5, CW / 2);
       grid.scale.set(CL / 2000, 1, CW / 2000);
     }
 
-    // Boxes + edge lines
+    const deck = scene.getObjectByName('deck');
+    if (deck) deck.position.set(0, -1, 0);
+
     placements.forEach((p, i) => {
       const geo = new THREE.BoxGeometry(p.l - 1.2, p.h - 1.2, p.w - 1.2);
-
-      const mat = new THREE.MeshLambertMaterial({
-        color: p.item.color, transparent: true, opacity: 0.85
-      });
+      const mat = new THREE.MeshLambertMaterial({ color: p.item.color, transparent: true, opacity: 0.88 });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(p.x + p.l / 2, p.y + p.h / 2, p.z + p.w / 2);
       mesh.castShadow = true;
+      mesh.receiveShadow = true;
       mesh.userData = { ...p, index: i };
       scene.add(mesh);
       meshes.push(mesh);
 
-      const edge = new THREE.LineSegments(
+      const edgeLine = new THREE.LineSegments(
         new THREE.EdgesGeometry(geo),
-        new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 })
+        new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 })
       );
-      edge.position.copy(mesh.position);
-      scene.add(edge);
-      meshes.push(edge);
+      edgeLine.position.copy(mesh.position);
+      scene.add(edgeLine);
+      meshes.push(edgeLine);
     });
 
-    // Recentre camera
     if (window._OS) {
       const os = window._OS;
       os.T.x = CL / 2; os.T.y = CH / 4; os.T.z = CW / 2;
-      os.S.r = Math.max(CL, CW, CH) * 2.2;
+      os.S.r = Math.max(CL, CW, CH) * 2.4;
       os.update();
     }
 
-    // Reset view toggles
     exploded = false;
     wired    = false;
     document.getElementById('vpEx').classList.remove('on');
     document.getElementById('vpWf').classList.remove('on');
+
+    if (!doorOpen) {
+      setTimeout(() => { if (!doorOpen) toggleDoor(); }, 400);
+    }
   }
 
   /* ─────────────────────────────────────────────
@@ -239,10 +465,9 @@
     );
     if (!window._OS) return;
     const { S, update } = window._OS;
-    const r = Math.max(CL, CW, CH) * 2.2;
-
+    const r = Math.max(CL, CW, CH) * 2.4;
     switch (preset) {
-      case 'persp': S.th = 0.8;       S.ph = 0.9;        S.r = r;       document.getElementById('vpPersp').classList.add('on'); break;
+      case 'persp': S.th = 0.8;       S.ph = 0.9;         S.r = r;       document.getElementById('vpPersp').classList.add('on'); break;
       case 'front': S.th = 0;         S.ph = Math.PI / 2; S.r = r;       document.getElementById('vpFront').classList.add('on'); break;
       case 'top':   S.th = 0;         S.ph = 0.06;        S.r = r * 1.2; document.getElementById('vpTop').classList.add('on');   break;
       case 'side':  S.th = Math.PI/2; S.ph = Math.PI / 2; S.r = r;       document.getElementById('vpSide').classList.add('on');  break;
@@ -256,7 +481,6 @@
   function toggleExplode() {
     exploded = !exploded;
     document.getElementById('vpEx').classList.toggle('on', exploded);
-
     meshes.filter(m => m.isMesh && m.userData.item).forEach(m => {
       const d = m.userData;
       if (exploded) {
@@ -281,15 +505,14 @@
   function toggleWireframe() {
     wired = !wired;
     document.getElementById('vpWf').classList.toggle('on', wired);
-
     meshes.filter(m => m.isMesh && m.userData.item).forEach(m => {
       m.material.wireframe = wired;
-      m.material.opacity   = wired ? 0.55 : 0.85;
+      m.material.opacity   = wired ? 0.55 : 0.88;
     });
   }
 
   /* ─────────────────────────────────────────────
-     HOVER TOOLTIP (raycaster)
+     HOVER TOOLTIP
   ───────────────────────────────────────────── */
   function initTooltip() {
     const vpEl = document.getElementById('vp');
@@ -306,14 +529,12 @@
       if (hits.length && hits[0].object.userData.item) {
         const d = hits[0].object.userData;
         const hex = '#' + d.item.color.toString(16).padStart(6, '0');
-
         document.getElementById('ttS').style.background = hex;
         document.getElementById('ttT').textContent  = d.item.sku;
         document.getElementById('ttSz').textContent = `${d.l}×${d.w}×${d.h}`;
         document.getElementById('ttP').textContent  = `${d.x.toFixed(0)}, ${d.y.toFixed(0)}, ${d.z.toFixed(0)}`;
         document.getElementById('ttW').textContent  = `${d.item.wt} kg`;
         document.getElementById('ttI').textContent  = `#${d.index + 1}`;
-
         tt.style.display = 'block';
         tt.style.left    = (e.clientX - rect.left + 14) + 'px';
         tt.style.top     = (e.clientY - rect.top  - 10) + 'px';
@@ -321,7 +542,6 @@
         tt.style.display = 'none';
       }
     });
-
     vpEl.addEventListener('mouseleave', () => { tt.style.display = 'none'; });
   }
 
@@ -331,12 +551,13 @@
   function clearScene() {
     meshes.forEach(m => scene.remove(m));
     meshes = [];
-    if (cMesh) { scene.remove(cMesh); cMesh = null; }
+    if (containerGroup) { scene.remove(containerGroup); containerGroup = null; }
+    cMesh = null;
+    doorL = null; doorR = null;
     exploded = false;
     wired    = false;
   }
 
-  // Public API
   global.Renderer = {
     init,
     initTooltip,
@@ -345,6 +566,7 @@
     toggleExplode,
     toggleWireframe,
     clearScene,
+    toggleDoor,
   };
 
 })(window);
