@@ -4,19 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CargoOpt3D — Industrial Cargo Loading Simulator</title>
-
-  <!--
-    File structure
-    ──────────────
-    index.html   ← you are here (markup + load order)
-    styles.css   ← all design tokens + component styles
-    packer.js    ← 3D bin-packing algorithm  (no DOM/Three deps)
-    renderer.js  ← Three.js scene, orbit, raycaster (needs Three.js)
-    app.js       ← UI controller (needs Packer + Renderer)
-
-    Load order:  three.js → packer.js → renderer.js → app.js
-  -->
-
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -24,7 +11,6 @@
 <!-- ── TOPBAR ── -->
 <header class="topbar">
   <div class="tb-brand">
-    <!-- Inline cargo-container icon (amber, ~22px) -->
     <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <rect x="1" y="7" width="20" height="14" rx="2" fill="none" stroke="#F59E0B" stroke-width="1.2"/>
       <path d="M1 10h20" stroke="#F59E0B" stroke-width="1.2" stroke-dasharray="2 2"/>
@@ -39,6 +25,12 @@
     <span>Optimizer</span>
     <span style="color:var(--rim2)">›</span>
     <span>3D Guillotine FFD</span>
+  </div>
+
+  <!-- FCL / LCL mode badges in topbar -->
+  <div class="tb-mode-row">
+    <span id="modeBadge" class="mode-badge fcl">FCL</span>
+    <span id="modeInfo" class="mode-info-text">Full Container Load — entire container reserved for one shipper.</span>
   </div>
 
   <div class="tb-pill">INDUSTRIAL</div>
@@ -58,14 +50,34 @@
   <aside class="panel">
     <div class="panel-inner">
 
+      <!-- FCL / LCL Mode -->
+      <div class="p-section">
+        <div class="section-eyebrow">Shipment mode</div>
+        <div class="mode-toggle-row">
+          <button class="mode-btn active" id="modeFCL" onclick="App.setMode('FCL')">
+            📦 FCL
+            <span class="mode-sub">Full Container</span>
+          </button>
+          <button class="mode-btn" id="modeLCL" onclick="App.setMode('LCL')">
+            🔀 LCL
+            <span class="mode-sub">Shared / Partial</span>
+          </button>
+        </div>
+        <div id="lclNote" class="lcl-note" style="display:none">
+          ⚠ LCL mode: fill capped at 60% — remaining space for co-shipper cargo.
+        </div>
+      </div>
+
       <!-- Container config -->
       <div class="p-section">
         <div class="section-eyebrow">Container</div>
         <div class="preset-chips">
-          <button class="chip active" onclick="App.setPreset(20, this)">20ft ISO</button>
-          <button class="chip"        onclick="App.setPreset(40, this)">40ft ISO</button>
+          <button class="chip active" onclick="App.setPreset(20, this)">20ft FCL</button>
+          <button class="chip"        onclick="App.setPreset(40, this)">40ft FCL</button>
           <button class="chip"        onclick="App.setPreset('hc', this)">40ft HC</button>
           <button class="chip"        onclick="App.setPreset('lt', this)">LTL Truck</button>
+          <button class="chip lcl-chip" onclick="App.setPreset('lcl20', this)">20ft LCL</button>
+          <button class="chip lcl-chip" onclick="App.setPreset('lcl40', this)">40ft LCL</button>
         </div>
         <div class="three-col">
           <div class="fg"><label>Length cm</label><input type="number" id="cL" value="589" min="1"></div>
@@ -117,6 +129,7 @@
       <!-- Run / Clear -->
       <div class="p-section">
         <button class="btn btn-run"   onclick="App.run()">▶ Run optimization</button>
+        <button class="btn btn-pdf"   onclick="App.generateReport()">⬇ Export PDF Report</button>
         <button class="btn btn-clear" onclick="App.clearAll()">✕ Clear all</button>
       </div>
 
@@ -172,6 +185,7 @@
         <button class="vp-btn"    id="vpSide"  onclick="App.cam('side')">Side</button>
         <button class="vp-btn"    id="vpEx"    onclick="App.toggleExplode()">Explode</button>
         <button class="vp-btn"    id="vpWf"    onclick="App.toggleWire()">Wireframe</button>
+        <button class="vp-btn door-btn" id="doorBtn" onclick="App.toggleDoor()">🚪 Open Door</button>
       </div>
 
       <!-- Hover tooltip -->
@@ -230,16 +244,11 @@
   </div><!-- /.right -->
 </div><!-- /.main -->
 
-<!--
-  Script load order matters:
-  1. three.js  — global THREE object
-  2. packer.js — window.Packer
-  3. renderer.js — window.Renderer (uses THREE)
-  4. app.js    — window.App (uses Packer + Renderer)
--->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="packer.js"></script>
 <script src="renderer.js"></script>
+<script src="report.js"></script>
 <script src="app.js"></script>
 
 </body>
