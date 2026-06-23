@@ -1,15 +1,8 @@
-
-
 (function (global) {
   'use strict';
 
   /**
    * Build all distinct orientations for a box (l × w × h).
-   * @param {number} l  original length
-   * @param {number} w  original width
-   * @param {number} h  original height
-   * @param {number} rot  1 = fixed, 2 = keep-Z-up, 6 = all permutations
-   * @returns {{ l, w, h }[]}
    */
   function getOrientations(l, w, h, rot) {
     if (rot === 1) return [{ l, w, h }];
@@ -28,19 +21,23 @@
   }
 
   /**
-   * Pack a list of carton-type descriptors into a container.
+   * Pack carton-type descriptors into a container.
    *
-   * @param {number} cL  container length  (cm)
-   * @param {number} cW  container width   (cm)
-   * @param {number} cH  container height  (cm)
-   * @param {number} maxWeight  max payload (kg); use Infinity to skip limit
-   * @param {Array}  cartonTypes  array of { l, w, h, qty, wt, sku, rot, color, id }
+   * Loading order: cartons are packed from the CLOSED FRONT END (x = cL)
+   * toward the DOOR END (x = 0), so the container fills from back to front.
+   * This mirrors real-world practice: you load the container from the far end
+   * and work back toward the doors.
+   *
+   * @param {number} cL  container length (cm)  — x axis: 0=door end, cL=front/closed end
+   * @param {number} cW  container width  (cm)
+   * @param {number} cH  container height (cm)
+   * @param {number} maxWeight  max payload (kg); use Infinity to skip
+   * @param {Array}  cartonTypes  [{l, w, h, qty, wt, sku, rot, color, id}]
    *
    * @returns {{ placements, totalWeight, totalItems }}
-   *   placements: [{ x, y, z, l, w, h, item }]
    */
   function pack(cL, cW, cH, maxWeight, cartonTypes) {
-    // Flatten carton types → individual item instances, largest-volume-first
+    /* Flatten to individual items, largest-volume-first */
     const items = [];
     for (const type of cartonTypes) {
       for (let i = 0; i < type.qty; i++) {
@@ -49,13 +46,22 @@
     }
     items.sort((a, b) => (b.l * b.w * b.h) - (a.l * a.w * a.h));
 
-    // Extreme-point set — starts at the container origin
+    /*
+     * Extreme-point initialised at the FRONT-BOTTOM-LEFT corner (x = cL - ε)
+     * is tricky because we'd need to work backward. Instead we use a simple
+     * coordinate flip approach:
+     *
+     * We pack in a virtual container where x'=0 is the physical FRONT (x=cL).
+     * After packing, we transform: real_x = cL - (x' + item_l)
+     *
+     * The extreme-point algorithm naturally fills from x'=0 (physical front)
+     * outward, so real boxes appear from the closed end toward the door.
+     */
     let eps = [{ x: 0, y: 0, z: 0 }];
-    const placements = [];
+    const virtualPlacements = [];
     let totalWeight = 0;
 
     for (const item of items) {
-      // Respect weight limit (skip if wt = 0, i.e. unset)
       if (item.wt && totalWeight + item.wt > maxWeight) continue;
 
       const orientations = getOrientations(item.l, item.w, item.h, item.rot);
@@ -66,30 +72,25 @@
         for (const o of orientations) {
           const { l, w, h } = o;
 
-          // Fits inside container?
           if (ep.x + l > cL + 0.01) continue;
           if (ep.y + h > cH + 0.01) continue;
           if (ep.z + w > cW + 0.01) continue;
 
-          // Overlaps with any already-placed box?
           let overlaps = false;
-          for (const p of placements) {
+          for (const p of virtualPlacements) {
             if (
               ep.x < p.x + p.l && ep.x + l > p.x &&
               ep.y < p.y + p.h && ep.y + h > p.y &&
               ep.z < p.z + p.w && ep.z + w > p.z
-            ) {
-              overlaps = true;
-              break;
-            }
+            ) { overlaps = true; break; }
           }
           if (overlaps) continue;
 
-          // Score: gravity-first (low Y), then depth (low Z), then width (low X)
-          const score = ep.y * 1e6 + ep.z * 1e3 + ep.x;
+          /* Score: fill low Y first, then deep X (toward closed end), then Z */
+          const score = ep.y * 1e6 + ep.x * 1e3 + ep.z;
           if (score < bestScore) {
             bestScore = score;
-            best = { x: ep.x, y: ep.y, z: ep.z, l, w, h, item, o };
+            best = { x: ep.x, y: ep.y, z: ep.z, l, w, h, item };
           }
         }
       }
@@ -97,19 +98,17 @@
       if (!best) continue;
 
       const { x, y, z, l, w, h } = best;
-      placements.push({ x, y, z, l, w, h, item });
+      virtualPlacements.push({ x, y, z, l, w, h, item });
       totalWeight += item.wt;
 
-      // Add three new extreme points after each placement
       eps.push({ x: x + l, y,       z       });
       eps.push({ x,        y: y + h, z       });
       eps.push({ x,        y,        z: z + w });
 
-      // Prune: remove points inside placed boxes or out-of-bounds
       const seen2 = new Set();
       eps = eps.filter(ep => {
         if (ep.x >= cL || ep.y >= cH || ep.z >= cW) return false;
-        for (const p of placements) {
+        for (const p of virtualPlacements) {
           if (
             ep.x >= p.x && ep.x < p.x + p.l &&
             ep.y >= p.y && ep.y < p.y + p.h &&
@@ -123,6 +122,16 @@
       });
     }
 
+    /*
+     * Flip x coordinates: real_x = cL - (x' + item_l)
+     * so x'=0 → real_x = cL - item_l  (against closed front wall)
+     * and x'→cL → real_x = 0 (near door end)
+     */
+    const placements = virtualPlacements.map(p => ({
+      ...p,
+      x: cL - (p.x + p.l),   // real x start in [0 .. cL]
+    }));
+
     return {
       placements,
       totalWeight,
@@ -130,7 +139,6 @@
     };
   }
 
-  // Public API
   global.Packer = { pack };
 
 })(window);
