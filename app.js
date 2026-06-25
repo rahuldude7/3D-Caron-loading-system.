@@ -61,6 +61,8 @@
     document.getElementById('cH').value     = h;
     document.getElementById('cMaxWt').value = wt;
     if (mode) setMode(mode);
+    // Refresh empty container preview whenever preset changes
+    Renderer.showEmptyContainer(l, w, h);
   }
 
   /* ─────────────────────────────────────────────
@@ -197,7 +199,18 @@
     Renderer.buildScene({ l: cL, w: cW, h: cH }, places);
     _renderManifest();
     _renderLegend();
-    fb.innerHTML = '';
+
+    // Container full message
+    const totalReq2 = types.reduce((s, t) => s + t.qty, 0);
+    if (places.length < totalReq2) {
+      const leftOut = totalReq2 - places.length;
+      fb.innerHTML = `<div class="feedback fb-full">
+        🚨 Container is full — <strong>${leftOut} carton${leftOut > 1 ? 's' : ''}</strong> could not fit.
+        Try a larger container or reduce quantity.
+      </div>`;
+    } else {
+      fb.innerHTML = '';
+    }
   }
 
   /* ─────────────────────────────────────────────
@@ -332,7 +345,9 @@
     Renderer.init();
     Renderer.initTooltip();
     setMode('FCL');
-    // Start completely empty — no demo cartons, no auto-run
+    // Show empty container immediately on load (20ft FCL defaults)
+    const [l, w, h] = PRESETS[20];
+    Renderer.showEmptyContainer(l, w, h);
     document.getElementById('fb').innerHTML = '';
   }
 
