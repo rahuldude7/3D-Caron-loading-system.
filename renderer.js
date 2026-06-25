@@ -205,13 +205,13 @@
     containerGroup = new THREE.Group();
 
     const steelMat = new THREE.MeshLambertMaterial({
-      color: 0x2f81f7, transparent: true, opacity: 0.08, side: THREE.BackSide
+      color: 0x2f81f7, transparent: true, opacity: 0.03, side: THREE.BackSide
     });
     const edgeMat = new THREE.LineBasicMaterial({
       color: 0xF59E0B, transparent: true, opacity: 0.7
     });
     const wallMat = new THREE.MeshLambertMaterial({
-      color: 0x1e3a5f, transparent: true, opacity: 0.18, side: THREE.DoubleSide
+      color: 0x4a90d9, transparent: true, opacity: 0.06, side: THREE.DoubleSide
     });
 
     /* Ghost box */
@@ -398,12 +398,10 @@
   }
 
   /* ─────────────────────────────────────────────
-     BUILD SCENE FROM PLACEMENTS
+     SHOW EMPTY CONTAINER (no cartons)
   ───────────────────────────────────────────── */
-  function buildScene(containerDims, placements) {
-    CL = containerDims.l;
-    CW = containerDims.w;
-    CH = containerDims.h;
+  function showEmptyContainer(cL, cW, cH) {
+    CL = cL; CW = cW; CH = cH;
 
     meshes.forEach(m => scene.remove(m));
     meshes = [];
@@ -415,29 +413,51 @@
       grid.position.set(CL / 2, -0.5, CW / 2);
       grid.scale.set(CL / 2000, 1, CW / 2000);
     }
-
     const deck = scene.getObjectByName('deck');
     if (deck) deck.position.set(0, -1, 0);
 
-    placements.forEach((p, i) => {
-      const geo = new THREE.BoxGeometry(p.l - 1.2, p.h - 1.2, p.w - 1.2);
-      const mat = new THREE.MeshLambertMaterial({ color: p.item.color, transparent: true, opacity: 0.88 });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(p.x + p.l / 2, p.y + p.h / 2, p.z + p.w / 2);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.userData = { ...p, index: i };
-      scene.add(mesh);
-      meshes.push(mesh);
+    if (window._OS) {
+      const os = window._OS;
+      os.T.x = CL / 2; os.T.y = CH / 4; os.T.z = CW / 2;
+      os.S.r = Math.max(CL, CW, CH) * 2.4;
+      os.update();
+    }
 
-      const edgeLine = new THREE.LineSegments(
-        new THREE.EdgesGeometry(geo),
-        new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 })
-      );
-      edgeLine.position.copy(mesh.position);
-      scene.add(edgeLine);
-      meshes.push(edgeLine);
-    });
+    exploded = false; wired = false;
+    document.getElementById('vpEx').classList.remove('on');
+    document.getElementById('vpWf').classList.remove('on');
+
+    // Ensure door is closed for empty container view
+    if (doorOpen) toggleDoor();
+  }
+
+  /* ─────────────────────────────────────────────
+     BUILD SCENE FROM PLACEMENTS — animated
+     Cartons appear one-by-one, back-to-front
+     (highest x first = back wall first)
+  ───────────────────────────────────────────── */
+  let _placeAnimId = null;
+
+  function buildScene(containerDims, placements) {
+    CL = containerDims.l;
+    CW = containerDims.w;
+    CH = containerDims.h;
+
+    // Cancel any running placement animation
+    if (_placeAnimId) { clearTimeout(_placeAnimId); _placeAnimId = null; }
+
+    meshes.forEach(m => scene.remove(m));
+    meshes = [];
+
+    _buildContainer(CL, CW, CH);
+
+    const grid = scene.getObjectByName('grid');
+    if (grid) {
+      grid.position.set(CL / 2, -0.5, CW / 2);
+      grid.scale.set(CL / 2000, 1, CW / 2000);
+    }
+    const deck = scene.getObjectByName('deck');
+    if (deck) deck.position.set(0, -1, 0);
 
     if (window._OS) {
       const os = window._OS;
@@ -451,9 +471,72 @@
     document.getElementById('vpEx').classList.remove('on');
     document.getElementById('vpWf').classList.remove('on');
 
+    // Sort placements back-to-front: highest x (back wall) first
+    const sorted = [...placements].sort((a, b) => (b.x + b.l / 2) - (a.x + a.l / 2));
+
+    // Open door before animation starts
     if (!doorOpen) {
-      setTimeout(() => { if (!doorOpen) toggleDoor(); }, 400);
+      setTimeout(() => { if (!doorOpen) toggleDoor(); }, 200);
     }
+
+    // Animate placements one-by-one with a short stagger
+    const DELAY = Math.min(60, Math.max(18, 1800 / sorted.length)); // adaptive speed
+    let idx = 0;
+
+    function placeNext() {
+      if (idx >= sorted.length) {
+        _placeAnimId = null;
+        return;
+      }
+      const p = sorted[idx];
+      const i = placements.indexOf(p); // preserve original index for tooltip
+
+      const geo = new THREE.BoxGeometry(p.l - 1.2, p.h - 1.2, p.w - 1.2);
+      const mat = new THREE.MeshLambertMaterial({ color: p.item.color, transparent: true, opacity: 0.88 });
+      const mesh = new THREE.Mesh(geo, mat);
+
+      const finalX = p.x + p.l / 2;
+      const finalY = p.y + p.h / 2;
+      const finalZ = p.z + p.w / 2;
+
+      // Start position: slide in from the door end (x=0 side), slightly outside
+      mesh.position.set(-p.l * 2, finalY, finalZ);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData = { ...p, index: i };
+      scene.add(mesh);
+      meshes.push(mesh);
+
+      const edgeLine = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 })
+      );
+      edgeLine.position.copy(mesh.position);
+      scene.add(edgeLine);
+      meshes.push(edgeLine);
+
+      // Smooth slide-in animation toward final position
+      let t = 0;
+      function slideStep() {
+        t += 0.14;
+        if (t >= 1) {
+          mesh.position.set(finalX, finalY, finalZ);
+          edgeLine.position.copy(mesh.position);
+          return;
+        }
+        const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
+        mesh.position.x = -p.l * 2 + (finalX - (-p.l * 2)) * ease;
+        edgeLine.position.copy(mesh.position);
+        requestAnimationFrame(slideStep);
+      }
+      slideStep();
+
+      idx++;
+      _placeAnimId = setTimeout(placeNext, DELAY);
+    }
+
+    // Small initial pause so door starts opening first
+    _placeAnimId = setTimeout(placeNext, 500);
   }
 
   /* ─────────────────────────────────────────────
@@ -562,6 +645,7 @@
     init,
     initTooltip,
     buildScene,
+    showEmptyContainer,
     setCameraPreset,
     toggleExplode,
     toggleWireframe,
