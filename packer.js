@@ -86,8 +86,14 @@
           }
           if (overlaps) continue;
 
-          /* Score: fill low Y first, then deep X (toward closed end), then Z */
-          const score = ep.y * 1e6 + ep.x * 1e3 + ep.z;
+          /*
+           * Score: fill back wall (low X in virtual space = real back/closed end)
+           * completely before advancing toward the door.
+           * Priority: X first (pack deep), then Y (floor to ceiling), then Z.
+           * This fills the full W×H cross-section slice at each depth level
+           * before moving toward the door — real-world container loading order.
+           */
+          const score = ep.x * 1e10 + ep.y * 1e5 + ep.z;
           if (score < bestScore) {
             bestScore = score;
             best = { x: ep.x, y: ep.y, z: ep.z, l, w, h, item };
@@ -122,11 +128,7 @@
       });
     }
 
-    /*
-     * Flip x coordinates: real_x = cL - (x' + item_l)
-     * so x'=0 → real_x = cL - item_l  (against closed front wall)
-     * and x'→cL → real_x = 0 (near door end)
-     */
+  
     const placements = virtualPlacements.map(p => ({
       ...p,
       x: cL - (p.x + p.l),   // real x start in [0 .. cL]
