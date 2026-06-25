@@ -1,8 +1,13 @@
+/* ============================================================
+   CargoOpt3D — styles.css
+   ============================================================ */
+
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
+/* ── RESET ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-
+/* ── DESIGN TOKENS ── */
 :root {
   --ink:    #080C16;
   --ink2:   #0F1623;
@@ -431,6 +436,17 @@ select option { background: var(--ink2); color: var(--text); }
   border: 1px solid var(--green-edge);
   color: var(--green);
 }
+.fb-full {
+  background: var(--red-soft);
+  border: 1px solid var(--red-edge);
+  color: var(--red);
+  font-size: 12px;
+  animation: pulse-full 1.2s ease-in-out 2;
+}
+@keyframes pulse-full {
+  0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,0); }
+  50%      { box-shadow: 0 0 0 4px rgba(248,113,113,0.25); }
+}
 
 /* ─────────────────────────────────────────
    RIGHT PANE
@@ -616,15 +632,19 @@ select option { background: var(--ink2); color: var(--text); }
 .vp-legend {
   position: absolute;
   bottom: 50px;
-  right: 14px;
+  left: 14px;
   background: rgba(8,12,22,0.82);
   border: 1px solid var(--rim2);
   border-radius: var(--r3);
   padding: 11px 14px;
   font-size: 11px;
   max-width: 180px;
+  max-height: 260px;
+  overflow-y: auto;
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+  scrollbar-width: thin;
+  scrollbar-color: var(--rim3) transparent;
 }
 .vp-legend-title {
   font-size: 9px;
